@@ -1,0 +1,76 @@
+# =============================================================
+# 天翼云电脑 GitHub Actions 定时保活
+# -------------------------------------------------------------
+# 原理：GitHub 服务器按计划启动一个 Ubuntu 运行器，用 Playwright
+#       驱动 Chrome 登录天翼云 Web 客户端 pc.ctyun.cn，先检测
+#       云电脑是否已有连接：
+#       · 已有连接（用户正在使用）→ 本轮跳过、不触发连接，
+#         等下一个定时周期再判断（避免踢出正在工作的会话）；
+#       · 无人连接 → 点击“进入AI云电脑”建立真实协议层连接并
+#         保持约 90 秒（期间每 10 秒移动一次鼠标），重置平台
+#         “1 小时无连接自动休眠”计时器。本地电脑/手机全程无需开机。
+#
+# 【部署前必做】仓库 Settings → Secrets and variables → Actions
+#   → New repository secret，添加两条：
+#     CTYUN_USERNAME = 天翼云账号（手机号）
+#     CTYUN_PASSWORD = 登录密码
+#
+# 【频率与免费额度——重要】
+#   默认每 30 分钟运行一次（见下方 cron），每次约 2~3 分钟，
+#   每月合计约 3600 分钟：
+#   · 公有仓库：标准运行器完全免费不限量，保持默认即可全年无忧。
+#     （本脚本不含任何账号密码，敏感信息全在 Secrets 中，
+#       即使公开也看不到，可放心改公有）
+#   · 私有仓库：免费额度仅 2000 分钟/月，跑不满每 30 分钟——
+#     请将 cron 改为 '0 * * * *'（每小时一次，约 1500 分钟/月），
+#     但 GitHub 定时偶有几分钟延迟，云电脑可能偶发短暂休眠，
+#     由下一次连接自动唤醒（自动化任务或被打断）。
+#
+# 【其他注意】
+#   · 定时任务只在仓库默认分支上生效，文件须提交到默认分支。
+#   · GitHub 对连续 60 天无任何提交的仓库会自动停用定时工作流，
+#     每隔一两个月提交任意小改动即可（或在 Actions 页手动重新启用）。
+#   · 上传后在 Actions 页面手动 Run workflow 跑一次验证，
+#     并下载 Artifacts 里的 screenshot.png 确认云电脑桌面真的连上了。
+#   · 若自己正在使用云电脑时定时任务恰好触发，可能出现
+#     “同一云电脑不能多终端同时登录”的冲突提示，属正常现象。
+# =============================================================
+name: Cloud-PC-KeepAlive
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # 每 30 分钟（私有仓库请改为 '0 * * * *'）
+  workflow_dispatch:          # 支持在 Actions 页面手动触发
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 安装 Playwright
+        run: pip install playwright
+
+      - name: 执行保活
+        env:
+          CTYUN_USERNAME: ${{ secrets.CTYUN_USERNAME }}
+          CTYUN_PASSWORD: ${{ secrets.CTYUN_PASSWORD }}
+          HOLD_SECONDS: '90'
+        run: python keepalive.py
+
+      - name: 上传截图（人工核验连接是否真正建立）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepalive-screenshot
+          path: screenshot.png
+          retention-days: 3
+          if-no-files-found: ignore
